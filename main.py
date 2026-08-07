@@ -21,26 +21,24 @@ import os
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
-
-# Dummy server so Replit detects an active port and keeps the process alive 24/7
-class HealthCheck(BaseHTTPRequestHandler):
+# Light HTTP server to satisfy Render's health checks
+class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.send_header("Content-type", "text/plain")
         self.end_headers()
-        self.wfile.write(b"Bot is online")
+        self.wfile.write(b"Bot is online and polling Instagram!")
 
     def log_message(self, format, *args):
-        return
+        return  # Suppress web server log spam
 
-
-def run_health_check():
+def start_health_server():
     port = int(os.environ.get("PORT", 8080))
-    server = HTTPServer(("0.0.0.0", port), HealthCheck)
+    server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
     server.serve_forever()
 
-
-threading.Thread(target=run_health_check, daemon=True).start()
+# Fire up health check server in background thread
+threading.Thread(target=start_health_server, daemon=True).start()
 
 # ---------------------------------------------------------------------------
 # Logging
