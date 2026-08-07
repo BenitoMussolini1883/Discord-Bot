@@ -4,6 +4,7 @@ import os
 import time
 import logging
 from pathlib import Path
+from urllib.parse import unquote
 
 from instagrapi import Client
 from instagrapi.exceptions import LoginRequired, ClientError
@@ -148,3 +149,21 @@ class InstagramClient:
         except ClientError as exc:
             log.error("Error fetching stories for @%s: %s", username, exc)
             return []
+
+    def login(self) -> None:
+        """Login via browser session ID — bypasses cloud-IP blocks."""
+        # unquote automatically converts %3A back to :
+        session_id = unquote(os.environ.get("IG_SESSION_ID", "").strip())
+        
+        if not session_id:
+            raise RuntimeError("IG_SESSION_ID environment variable is not set.")
+    
+        log.info("Logging in via session ID…")
+        try:
+            self.cl.login_by_sessionid(session_id)
+            username = self.cl.username
+            log.info("Logged in as @%s", username)
+            self.cl.dump_settings(SESSION_FILE)
+        except Exception as exc:
+            log.error("Session ID login failed: %s", exc)
+            raise
