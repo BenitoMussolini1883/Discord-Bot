@@ -1,0 +1,14 @@
+# Instagram accounts to monitor — one username per line.
+# Lines starting with # are ignored.
+# Edit this file anytime; changes take effect on the next poll cycle.
+#
+# Examples:
+# ucsd_chess_club
+# ucsd_swimming
+#
+# --- Add your accounts below ---
+hokiesdbf
+vtaiaa
+vtmotorsports
+rocketryatvirginiatech
+virginiatechaoe__
