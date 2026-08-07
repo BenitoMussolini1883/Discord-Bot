@@ -1,19 +1,17 @@
 """Instagram API wrapper using instagrapi — session-ID login."""
 
-import os
-import time
 import logging
+import os
 from pathlib import Path
 from urllib.parse import unquote
 
 from instagrapi import Client
-from instagrapi.exceptions import LoginRequired, ClientError
+from instagrapi.exceptions import ClientError, LoginRequired
 
 log = logging.getLogger(__name__)
 
-BOT_DIR     = Path(__file__).parent
+BOT_DIR = Path(__file__).parent
 SESSION_FILE = BOT_DIR / "session.json"
-CHALLENGE_CODE_FILE = BOT_DIR / "challenge_code.txt"
 
 
 def _make_client() -> Client:
@@ -32,26 +30,39 @@ class InstagramClient:
     # ------------------------------------------------------------------
 
     def login(self) -> None:
-        """Login via browser session ID — bypasses cloud-IP blocks."""
-        session_id = os.environ.get("IG_SESSION_ID", "").strip()
+        """Set session ID directly — bypasses cloud-IP verification blocks."""
+        raw_session_id = os.environ.get("IG_SESSION_ID", "").strip()
+        session_id = unquote(raw_session_id)
+
         if not session_id:
             raise RuntimeError(
                 "IG_SESSION_ID environment variable is not set. "
                 "See the bot README for instructions on how to get your session ID."
             )
 
-        log.info("Logging in via session ID…")
+        log.info("Setting Instagram session ID directly...")
+
         try:
-            self.cl.login_by_sessionid(session_id)
-            username = self.cl.username
-            log.info("Logged in as @%s", username)
-            self.cl.dump_settings(SESSION_FILE)
+            # Inject sessionid directly into instagrapi settings to prevent 467 Client Error
+            self.cl.set_settings({
+                "uuids": {
+                    "phone_id": "00000000-0000-0000-0000-000000000000",
+                    "uuid": "00000000-0000-0000-0000-000000000000",
+                    "client_session_id": "00000000-0000-0000-0000-000000000000",
+                    "advertising_id": "00000000-0000-0000-0000-000000000000",
+                    "device_id": "android-0000000000000000"
+                },
+                "cookies": {
+                    "sessionid": session_id
+                }
+            })
+            log.info("Session ID set successfully.")
         except Exception as exc:
-            log.error("Session ID login failed: %s", exc)
+            log.error("Failed to initialize Instagram session: %s", exc)
             raise
 
     def relogin(self) -> None:
-        """Re-initialise and log in again (called after LoginRequired)."""
+        """Re-initialise and set session again (called after LoginRequired)."""
         log.warning("Session expired — re-logging in…")
         SESSION_FILE.unlink(missing_ok=True)
         self._user_id_cache.clear()
@@ -63,8 +74,15 @@ class InstagramClient:
     # ------------------------------------------------------------------
 
     def _get_user_id(self, username: str) -> str:
+        """Fetch user ID with fallbacks to avoid datacenter IP bans."""
         if username not in self._user_id_cache:
-            self._user_id_cache[username] = self.cl.user_id_from_username(username)
+            try:
+                # Try public web endpoint first
+                user_info = self.cl.user_info_by_username_v1(username)
+                self._user_id_cache[username] = str(user_info.pk)
+            except Exception:
+                # Fallback to standard private endpoint lookup
+                self._user_id_cache[username] = str(self.cl.user_id_from_username(username))
         return self._user_id_cache[username]
 
     # ------------------------------------------------------------------
@@ -149,21 +167,3 @@ class InstagramClient:
         except ClientError as exc:
             log.error("Error fetching stories for @%s: %s", username, exc)
             return []
-
-    def login(self) -> None:
-        """Login via browser session ID — bypasses cloud-IP blocks."""
-        # unquote automatically converts %3A back to :
-        session_id = unquote(os.environ.get("IG_SESSION_ID", "").strip())
-        
-        if not session_id:
-            raise RuntimeError("IG_SESSION_ID environment variable is not set.")
-    
-        log.info("Logging in via session ID…")
-        try:
-            self.cl.login_by_sessionid(session_id)
-            username = self.cl.username
-            log.info("Logged in as @%s", username)
-            self.cl.dump_settings(SESSION_FILE)
-        except Exception as exc:
-            log.error("Session ID login failed: %s", exc)
-            raise
