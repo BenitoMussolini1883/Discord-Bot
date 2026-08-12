@@ -97,25 +97,32 @@ class InstagramClient:
             
         raise ValueError(f"Could not parse User ID from HTML for @{username}")
 
-    def _get_user_id(self, username: str) -> str:
-        """Fetch user ID with web HTML scraping fallback."""
-        username = username.lstrip("@").strip()
+    def _get_user_id(self, account_entry: str) -> str:
+        """
+        Parses account entry. 
+        Supports both 'username' and 'username:user_id' (e.g. 'hokiesdbf:5337229158').
+        """
+        account_entry = account_entry.strip()
+        
+        # If user provided 'username:user_id' in accounts.txt
+        if ":" in account_entry:
+            username, user_id = account_entry.split(":", 1)
+            self._user_id_cache[username] = user_id.strip()
+            return user_id.strip()
+
+        username = account_entry.lstrip("@").strip()
 
         if username not in self._user_id_cache:
             try:
-                # 1. Direct Web HTML Scrape (Fastest & avoids instagrapi ?__a=1 calls)
-                uid = self._scrape_user_id_from_html(username)
-                self._user_id_cache[username] = uid
-                log.info("Scraped user ID for @%s: %s", username, uid)
-            except Exception as e1:
-                log.warning("Web scrape failed for @%s: %s. Trying instagrapi fallback...", username, e1)
-                try:
-                    # 2. Fallback to instagrapi internal method
-                    uid = str(self.cl.user_id_from_username(username))
-                    self._user_id_cache[username] = uid
-                except Exception as e2:
-                    log.error("All user ID lookup methods failed for @%s: %s", username, e2)
-                    raise
+                # Try authenticated instagrapi lookup
+                user_info = self.cl.user_info_by_username_v1(username)
+                self._user_id_cache[username] = str(user_info.pk)
+            except Exception as e:
+                log.error("Could not resolve user ID for @%s on Render IP: %s", username, e)
+                raise RuntimeError(
+                    f"Failed to fetch ID for @{username}. Please specify 'username:user_id' "
+                    f"in accounts.txt to bypass Instagram's cloud IP block."
+                )
 
         return self._user_id_cache[username]
 
