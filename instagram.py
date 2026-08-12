@@ -188,11 +188,12 @@ class InstagramClient:
     def get_recent_posts(self, username: str, count: int = 8) -> list[dict]:
         try:
             uid = self._get_user_id(username)
-            return [self._media_to_dict(m) for m in self.cl.user_medias(uid, amount=count)]
+            # Use user_medias_v1 to force mobile private API
+            return [self._media_to_dict(m) for m in self.cl.user_medias_v1(uid, amount=count)]
         except LoginRequired:
             self.relogin()
             uid = self._get_user_id(username)
-            return [self._media_to_dict(m) for m in self.cl.user_medias(uid, amount=count)]
+            return [self._media_to_dict(m) for m in self.cl.user_medias_v1(uid, amount=count)]
         except ClientError as exc:
             log.error("Error fetching posts for @%s: %s", username, exc)
             return []
