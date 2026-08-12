@@ -2,9 +2,11 @@
 
 import logging
 import os
+import re
 from pathlib import Path
 from urllib.parse import unquote
 
+import requests
 from instagrapi import Client
 from instagrapi.exceptions import ClientError, LoginRequired
 
@@ -12,6 +14,16 @@ log = logging.getLogger(__name__)
 
 BOT_DIR = Path(__file__).parent
 SESSION_FILE = BOT_DIR / "session.json"
+
+# Standard desktop User-Agent to fetch public profile HTML without triggering blocks
+WEB_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    ),
+    "Accept-Language": "en-US,en;q=0.9",
+}
 
 
 def _make_client() -> Client:
@@ -43,18 +55,15 @@ class InstagramClient:
         log.info("Setting Instagram session ID directly...")
 
         try:
-            # Inject sessionid directly into instagrapi settings to prevent 467 Client Error
             self.cl.set_settings({
                 "uuids": {
                     "phone_id": "00000000-0000-0000-0000-000000000000",
                     "uuid": "00000000-0000-0000-0000-000000000000",
                     "client_session_id": "00000000-0000-0000-0000-000000000000",
                     "advertising_id": "00000000-0000-0000-0000-000000000000",
-                    "device_id": "android-0000000000000000"
+                    "device_id": "android-0000000000000000",
                 },
-                "cookies": {
-                    "sessionid": session_id
-                }
+                "cookies": {"sessionid": session_id},
             })
             log.info("Session ID set successfully.")
         except Exception as exc:
@@ -70,23 +79,40 @@ class InstagramClient:
         self.login()
 
     # ------------------------------------------------------------------
-    # User ID cache
+    # User ID Resolution (Custom Web Parser)
     # ------------------------------------------------------------------
 
+    def _scrape_user_id_from_html(self, username: str) -> str:
+        """Extract user ID directly from public web HTML to bypass instagrapi GQL/API blocks."""
+        url = f"https://www.instagram.com/{username}/"
+        resp = requests.get(url, headers=WEB_HEADERS, timeout=10)
+        
+        # Search HTML for profile_id / owner_id tags
+        matches = re.findall(r'"profile_id":"(\d+)"', resp.text) or \
+                  re.findall(r'"user_id":"(\d+)"', resp.text) or \
+                  re.findall(r'"owner":{"id":"(\d+)"', resp.text)
+                  
+        if matches:
+            return matches[0]
+            
+        raise ValueError(f"Could not parse User ID from HTML for @{username}")
+
     def _get_user_id(self, username: str) -> str:
-        """Fetch user ID using web_profile_info to avoid broken endpoints and 467 errors."""
+        """Fetch user ID with web HTML scraping fallback."""
         username = username.lstrip("@").strip()
 
         if username not in self._user_id_cache:
             try:
-                # Use modern GraphQL web profile scraper (does not use deprecated ?__a=1)
-                info = self.cl.user_info_by_username_gql(username)
-                self._user_id_cache[username] = str(info.pk)
-                log.info("Successfully fetched ID for @%s: %s", username, info.pk)
+                # 1. Direct Web HTML Scrape (Fastest & avoids instagrapi ?__a=1 calls)
+                uid = self._scrape_user_id_from_html(username)
+                self._user_id_cache[username] = uid
+                log.info("Scraped user ID for @%s: %s", username, uid)
             except Exception as e1:
-                log.warning("GQL lookup failed for @%s: %s. Trying direct user ID lookup...", username, e1)
+                log.warning("Web scrape failed for @%s: %s. Trying instagrapi fallback...", username, e1)
                 try:
-                    self._user_id_cache[username] = str(self.cl.user_id_from_username(username))
+                    # 2. Fallback to instagrapi internal method
+                    uid = str(self.cl.user_id_from_username(username))
+                    self._user_id_cache[username] = uid
                 except Exception as e2:
                     log.error("All user ID lookup methods failed for @%s: %s", username, e2)
                     raise
