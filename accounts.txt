@@ -7,9 +7,9 @@
 # ucsd_swimming
 #
 # --- Add your accounts below ---
-hokiesdbf:5337229158
-vtaiaa:4521098411
-vtmotorsports:120498112
-rocketryatvirginiatech:3129581021
-virginiatechaoe__:4829104812
-vt_engineering:2049182301
+hokiesdbf
+vtaiaa
+vtmotorsports
+rocketryatvirginiatech
+virginiatechaoe__
+vt_engineering
