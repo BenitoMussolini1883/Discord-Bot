@@ -1,211 +1,159 @@
-"""Instagram API wrapper using instagrapi — session-ID login."""
+"""
+Instagram API wrapper using RapidAPI.
+Bypasses Instagram datacenter IP blocks and login challenges.
+"""
 
 import logging
 import os
-import re
-from pathlib import Path
-from urllib.parse import unquote
-
 import requests
-from instagrapi import Client
-from instagrapi.exceptions import ClientError, LoginRequired
 
 log = logging.getLogger(__name__)
 
-BOT_DIR = Path(__file__).parent
-SESSION_FILE = BOT_DIR / "session.json"
-
-# Standard desktop User-Agent to fetch public profile HTML without triggering blocks
-WEB_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/120.0.0.0 Safari/537.36"
-    ),
-    "Accept-Language": "en-US,en;q=0.9",
-}
-
-
-def _make_client() -> Client:
-    cl = Client()
-    cl.delay_range = [1, 3]
-    return cl
+# RapidAPI configuration
+RAPID_HOST = "instagram-scraper-api2.p.rapidapi.com"
+BASE_URL = f"https://{RAPID_HOST}"
 
 
 class InstagramClient:
     def __init__(self) -> None:
-        self.cl = _make_client()
-        self._user_id_cache: dict[str, str] = {}
-
-    # ------------------------------------------------------------------
-    # Auth
-    # ------------------------------------------------------------------
+        self.api_key = os.environ.get("RAPIDAPI_KEY", "").strip()
 
     def login(self) -> None:
-        """Set session ID directly — bypasses cloud-IP verification blocks."""
-        raw_session_id = os.environ.get("IG_SESSION_ID", "").strip()
-        session_id = unquote(raw_session_id)
-
-        if not session_id:
-            raise RuntimeError(
-                "IG_SESSION_ID environment variable is not set. "
-                "See the bot README for instructions on how to get your session ID."
+        """Validates that the RapidAPI key is present."""
+        if not self.api_key:
+            log.warning(
+                "RAPIDAPI_KEY environment variable is not set. "
+                "The bot will attempt unauthenticated public fetches."
             )
+        else:
+            log.info("RapidAPI key detected and configured.")
 
-        log.info("Setting Instagram session ID directly...")
+    def _headers(self) -> dict:
+        return {
+            "x-rapidapi-key": self.api_key,
+            "x-rapidapi-host": RAPID_HOST,
+        }
+
+    # ------------------------------------------------------------------
+    # Public API (Matches interface expected by main.py)
+    # ------------------------------------------------------------------
+
+    def get_recent_posts(self, account_entry: str, count: int = 8) -> list[dict]:
+        """Fetch recent posts for a given username using RapidAPI."""
+        # Clean username if format is 'username:user_id'
+        username = account_entry.split(":")[0].lstrip("@").strip()
+        url = f"{BASE_URL}/v1/posts"
+        params = {"username_or_id_or_url": username}
 
         try:
-            self.cl.set_settings({
-                "uuids": {
-                    "phone_id": "00000000-0000-0000-0000-000000000000",
-                    "uuid": "00000000-0000-0000-0000-000000000000",
-                    "client_session_id": "00000000-0000-0000-0000-000000000000",
-                    "advertising_id": "00000000-0000-0000-0000-000000000000",
-                    "device_id": "android-0000000000000000",
-                },
-                "cookies": {"sessionid": session_id},
-            })
-            log.info("Session ID set successfully.")
-        except Exception as exc:
-            log.error("Failed to initialize Instagram session: %s", exc)
-            raise
+            resp = requests.get(url, headers=self._headers(), params=params, timeout=15)
+            if resp.status_code != 200:
+                log.error("RapidAPI error %s for @%s: %s", resp.status_code, username, resp.text[:200])
+                return []
 
-    def relogin(self) -> None:
-        """Re-initialise and set session again (called after LoginRequired)."""
-        log.warning("Session expired — re-logging in…")
-        SESSION_FILE.unlink(missing_ok=True)
-        self._user_id_cache.clear()
-        self.cl = _make_client()
-        self.login()
-
-    # ------------------------------------------------------------------
-    # User ID Resolution (Custom Web Parser)
-    # ------------------------------------------------------------------
-
-    def _scrape_user_id_from_html(self, username: str) -> str:
-        """Extract user ID directly from public web HTML to bypass instagrapi GQL/API blocks."""
-        url = f"https://www.instagram.com/{username}/"
-        resp = requests.get(url, headers=WEB_HEADERS, timeout=10)
-        
-        # Search HTML for profile_id / owner_id tags
-        matches = re.findall(r'"profile_id":"(\d+)"', resp.text) or \
-                  re.findall(r'"user_id":"(\d+)"', resp.text) or \
-                  re.findall(r'"owner":{"id":"(\d+)"', resp.text)
-                  
-        if matches:
-            return matches[0]
+            data = resp.json()
+            items = data.get("data", {}).get("items", []) or data.get("items", [])
             
-        raise ValueError(f"Could not parse User ID from HTML for @{username}")
+            posts = []
+            for item in items[:count]:
+                post_dict = self._parse_post(username, item)
+                if post_dict:
+                    posts.append(post_dict)
+            return posts
 
-    def _get_user_id(self, account_entry: str) -> str:
-        """
-        Parses account entry. 
-        Supports both 'username' and 'username:user_id' (e.g. 'hokiesdbf:5337229158').
-        """
-        account_entry = account_entry.strip()
-        
-        # If user provided 'username:user_id' in accounts.txt
-        if ":" in account_entry:
-            username, user_id = account_entry.split(":", 1)
-            self._user_id_cache[username] = user_id.strip()
-            return user_id.strip()
-
-        username = account_entry.lstrip("@").strip()
-
-        if username not in self._user_id_cache:
-            try:
-                # Try authenticated instagrapi lookup
-                user_info = self.cl.user_info_by_username_v1(username)
-                self._user_id_cache[username] = str(user_info.pk)
-            except Exception as e:
-                log.error("Could not resolve user ID for @%s on Render IP: %s", username, e)
-                raise RuntimeError(
-                    f"Failed to fetch ID for @{username}. Please specify 'username:user_id' "
-                    f"in accounts.txt to bypass Instagram's cloud IP block."
-                )
-
-        return self._user_id_cache[username]
-
-    # ------------------------------------------------------------------
-    # Serialisers
-    # ------------------------------------------------------------------
-
-    def _media_to_dict(self, m) -> dict:
-        images: list[str] = []
-        video_url: str | None = None
-
-        if m.media_type == 1:      # photo
-            url = m.thumbnail_url or getattr(m, "url", None)
-            if url:
-                images.append(str(url))
-        elif m.media_type == 2:    # video
-            if m.thumbnail_url:
-                images.append(str(m.thumbnail_url))
-            if m.video_url:
-                video_url = str(m.video_url)
-        elif m.media_type == 8:    # carousel / album
-            for res in m.resources:
-                thumb = res.thumbnail_url or getattr(res, "url", None)
-                if thumb:
-                    images.append(str(thumb))
-
-        return {
-            "id": str(m.id),
-            "caption": (m.caption_text or "").strip(),
-            "timestamp": m.taken_at.isoformat() if m.taken_at else "",
-            "url": f"https://www.instagram.com/p/{m.code}/",
-            "media_type": m.media_type,
-            "images": images,
-            "video_url": video_url,
-        }
-
-    def _story_to_dict(self, s) -> dict:
-        image_url: str | None = None
-        video_url: str | None = None
-
-        if s.media_type == 1:
-            url = s.thumbnail_url or getattr(s, "url", None)
-            if url:
-                image_url = str(url)
-        elif s.media_type == 2:
-            if s.thumbnail_url:
-                image_url = str(s.thumbnail_url)
-            if s.video_url:
-                video_url = str(s.video_url)
-
-        return {
-            "id": str(s.id),
-            "timestamp": s.taken_at.isoformat() if s.taken_at else "",
-            "media_type": s.media_type,
-            "image_url": image_url,
-            "video_url": video_url,
-        }
-
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
-
-    def get_recent_posts(self, username: str, count: int = 8) -> list[dict]:
-        try:
-            uid = self._get_user_id(username)
-            # Use user_medias_v1 to force mobile private API
-            return [self._media_to_dict(m) for m in self.cl.user_medias_v1(uid, amount=count)]
-        except LoginRequired:
-            self.relogin()
-            uid = self._get_user_id(username)
-            return [self._media_to_dict(m) for m in self.cl.user_medias_v1(uid, amount=count)]
-        except ClientError as exc:
-            log.error("Error fetching posts for @%s: %s", username, exc)
+        except Exception as exc:
+            log.error("Error fetching posts via RapidAPI for @%s: %s", username, exc)
             return []
 
-    def get_stories(self, username: str) -> list[dict]:
+    def get_stories(self, account_entry: str) -> list[dict]:
+        """Fetch active stories for a given username using RapidAPI."""
+        username = account_entry.split(":")[0].lstrip("@").strip()
+        url = f"{BASE_URL}/v1/stories"
+        params = {"username_or_id_or_url": username}
+
         try:
-            uid = self._get_user_id(username)
-            return [self._story_to_dict(s) for s in self.cl.user_stories(uid)]
-        except LoginRequired:
-            self.relogin()
-            uid = self._get_user_id(username)
-            return [self._story_to_dict(s) for s in self.cl.user_stories(uid)]
-        except ClientError as exc:
-            log.error("Error fetching stories for @%s: %s", username, exc)
+            resp = requests.get(url, headers=self._headers(), params=params, timeout=15)
+            if resp.status_code != 200:
+                # Stories endpoint often returns 404 when an account has no active stories
+                if resp.status_code != 404:
+                    log.error("RapidAPI story error %s for @%s", resp.status_code, username)
+                return []
+
+            data = resp.json()
+            items = data.get("data", {}).get("items", []) or data.get("items", [])
+
+            stories = []
+            for item in items:
+                story_dict = self._parse_story(item)
+                if story_dict:
+                    stories.append(story_dict)
+            return stories
+
+        except Exception as exc:
+            log.error("Error fetching stories via RapidAPI for @%s: %s", username, exc)
             return []
+
+    # ------------------------------------------------------------------
+    # Item Parsers
+    # ------------------------------------------------------------------
+
+    def _parse_post(self, username: str, item: dict) -> dict | None:
+        try:
+            post_id = str(item.get("id") or item.get("pk", ""))
+            code = item.get("code") or item.get("shortcode", "")
+            caption_obj = item.get("caption") or {}
+            caption_text = caption_obj.get("text", "") if isinstance(caption_obj, dict) else str(caption_obj)
+
+            images = []
+            video_url = None
+
+            # Extract media URLs
+            carousel_media = item.get("resources") or item.get("carousel_media") or []
+            if carousel_media:
+                for child in carousel_media:
+                    img = self._extract_image_url(child)
+                    if img:
+                        images.append(img)
+            else:
+                img = self._extract_image_url(item)
+                if img:
+                    images.append(img)
+
+            if item.get("video_url"):
+                video_url = str(item.get("video_url"))
+
+            return {
+                "id": post_id,
+                "caption": caption_text.strip(),
+                "timestamp": str(item.get("taken_at") or ""),
+                "url": f"https://www.instagram.com/p/{code}/" if code else f"https://www.instagram.com/{username}/",
+                "media_type": item.get("media_type", 1),
+                "images": images,
+                "video_url": video_url,
+            }
+        except Exception as exc:
+            log.warning("Failed to parse post item: %s", exc)
+            return None
+
+    def _parse_story(self, item: dict) -> dict | None:
+        try:
+            story_id = str(item.get("id") or item.get("pk", ""))
+            image_url = self._extract_image_url(item)
+            video_url = item.get("video_url")
+
+            return {
+                "id": story_id,
+                "timestamp": str(item.get("taken_at") or ""),
+                "media_type": item.get("media_type", 1),
+                "image_url": image_url,
+                "video_url": str(video_url) if video_url else None,
+            }
+        except Exception as exc:
+            log.warning("Failed to parse story item: %s", exc)
+            return None
+
+    def _extract_image_url(self, item: dict) -> str | None:
+        image_versions = item.get("image_versions2", {}).get("candidates", [])
+        if image_versions:
+            return image_versions[0].get("url")
+        return item.get("thumbnail_url") or item.get("display_url")
