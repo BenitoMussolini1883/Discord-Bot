@@ -167,3 +167,23 @@ class InstagramClient:
         except ClientError as exc:
             log.error("Error fetching stories for @%s: %s", username, exc)
             return []
+            
+    def _get_user_id(self, username: str) -> str:
+        """Fetch user ID using web_profile_info to avoid broken endpoints and 467 errors."""
+        username = username.lstrip("@").strip()
+        
+        if username not in self._user_id_cache:
+            try:
+                # Use modern GraphQL web profile scraper (does not use deprecated ?__a=1)
+                info = self.cl.user_info_by_username_gql(username)
+                self._user_id_cache[username] = str(info.pk)
+                log.info("Successfully fetched ID for @%s: %s", username, info.pk)
+            except Exception as e1:
+                log.warning("GQL lookup failed for @%s: %s. Trying direct user ID lookup...", username, e1)
+                try:
+                    self._user_id_cache[username] = str(self.cl.user_id_from_username(username))
+                except Exception as e2:
+                    log.error("All user ID lookup methods failed for @%s: %s", username, e2)
+                    raise
+                    
+        return self._user_id_cache[username]
