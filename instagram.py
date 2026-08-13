@@ -9,6 +9,7 @@ import requests
 
 log = logging.getLogger(__name__)
 
+# RapidAPI configuration for "instagram-scraper-stable-api"
 RAPID_HOST = "instagram-scraper-stable-api.p.rapidapi.com"
 BASE_URL = f"https://{RAPID_HOST}"
 
@@ -41,9 +42,8 @@ class InstagramClient:
     def get_recent_posts(self, account_entry: str, count: int = 8) -> list[dict]:
         """Fetch recent posts for a given username using RapidAPI POST endpoint."""
         username = account_entry.split(":")[0].lstrip("@").strip()
-        url = f"{BASE_URL}/get_ig_user_posts_v2.php"
+        url = f"{BASE_URL}/get_ig_user_posts.php"
         
-        # Form Data payload as required by Instagram Scraper Stable API
         payload = {
             "username_or_url": username,
             "amount": count
@@ -51,13 +51,18 @@ class InstagramClient:
 
         try:
             resp = requests.post(url, headers=self._headers(), data=payload, timeout=15)
+            
+            # Fallback to v2 endpoint if v1 returns non-200
+            if resp.status_code == 404:
+                url_v2 = f"{BASE_URL}/get_ig_user_posts_v2.php"
+                resp = requests.post(url_v2, headers=self._headers(), data=payload, timeout=15)
+
             if resp.status_code != 200:
                 log.error("RapidAPI error %s for @%s: %s", resp.status_code, username, resp.text[:200])
                 return []
 
             data = resp.json()
             
-            # Navigate typical response structures returned by the scraper API
             items = []
             if isinstance(data, list):
                 items = data
@@ -84,11 +89,17 @@ class InstagramClient:
     def get_stories(self, account_entry: str) -> list[dict]:
         """Fetch active stories for a given username using RapidAPI POST endpoint."""
         username = account_entry.split(":")[0].lstrip("@").strip()
-        url = f"{BASE_URL}/get_ig_user_stories_v2.php"
+        url = f"{BASE_URL}/get_ig_user_stories.php"
         payload = {"username_or_url": username}
 
         try:
             resp = requests.post(url, headers=self._headers(), data=payload, timeout=15)
+            
+            # Fallback to v2 endpoint if v1 returns non-200
+            if resp.status_code == 404:
+                url_v2 = f"{BASE_URL}/get_ig_user_stories_v2.php"
+                resp = requests.post(url_v2, headers=self._headers(), data=payload, timeout=15)
+
             if resp.status_code != 200:
                 if resp.status_code != 404:
                     log.error("RapidAPI story error %s for @%s", resp.status_code, username)
@@ -132,7 +143,6 @@ class InstagramClient:
             images = []
             video_url = None
 
-            # Extract image URLs from carousel resources or root post object
             carousel_media = item.get("resources") or item.get("carousel_media") or []
             if carousel_media:
                 for child in carousel_media:
