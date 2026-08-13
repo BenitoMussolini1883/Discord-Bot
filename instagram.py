@@ -10,7 +10,7 @@ import requests
 log = logging.getLogger(__name__)
 
 # RapidAPI configuration
-RAPID_HOST = "instagram-scraper-api2.p.rapidapi.com"
+RAPID_HOST = "instagram-scraper-stable-api.p.rapidapi.com"
 BASE_URL = f"https://{RAPID_HOST}"
 
 
@@ -42,7 +42,7 @@ class InstagramClient:
         """Fetch recent posts for a given username using RapidAPI."""
         # Clean username if format is 'username:user_id'
         username = account_entry.split(":")[0].lstrip("@").strip()
-        url = f"{BASE_URL}/v1/posts"
+        url = f"{BASE_URL}/get_ig_user_followers_v2.php"
         params = {"username_or_id_or_url": username}
 
         try:
