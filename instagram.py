@@ -1,5 +1,5 @@
 """
-Instagram API wrapper using RapidAPI.
+Instagram API wrapper using RapidAPI (Instagram Scraper Stable API).
 Bypasses Instagram datacenter IP blocks and login challenges.
 """
 
@@ -9,7 +9,7 @@ import requests
 
 log = logging.getLogger(__name__)
 
-# RapidAPI configuration
+# RapidAPI configuration for "instagram-scraper-stable-api"
 RAPID_HOST = "instagram-scraper-stable-api.p.rapidapi.com"
 BASE_URL = f"https://{RAPID_HOST}"
 
@@ -40,9 +40,8 @@ class InstagramClient:
 
     def get_recent_posts(self, account_entry: str, count: int = 8) -> list[dict]:
         """Fetch recent posts for a given username using RapidAPI."""
-        # Clean username if format is 'username:user_id'
         username = account_entry.split(":")[0].lstrip("@").strip()
-        url = f"{BASE_URL}/get_ig_user_followers_v2.php"
+        url = f"{BASE_URL}/get_ig_user_posts_v2.php"
         params = {"username_or_id_or_url": username}
 
         try:
@@ -52,7 +51,8 @@ class InstagramClient:
                 return []
 
             data = resp.json()
-            items = data.get("data", {}).get("items", []) or data.get("items", [])
+            # Parse list of items from API response
+            items = data.get("data", {}).get("items", []) or data.get("items", []) or data.get("data", [])
             
             posts = []
             for item in items[:count]:
@@ -68,19 +68,18 @@ class InstagramClient:
     def get_stories(self, account_entry: str) -> list[dict]:
         """Fetch active stories for a given username using RapidAPI."""
         username = account_entry.split(":")[0].lstrip("@").strip()
-        url = f"{BASE_URL}/v1/stories"
+        url = f"{BASE_URL}/get_ig_user_stories_v2.php"
         params = {"username_or_id_or_url": username}
 
         try:
             resp = requests.get(url, headers=self._headers(), params=params, timeout=15)
             if resp.status_code != 200:
-                # Stories endpoint often returns 404 when an account has no active stories
                 if resp.status_code != 404:
                     log.error("RapidAPI story error %s for @%s", resp.status_code, username)
                 return []
 
             data = resp.json()
-            items = data.get("data", {}).get("items", []) or data.get("items", [])
+            items = data.get("data", {}).get("items", []) or data.get("items", []) or data.get("data", [])
 
             stories = []
             for item in items:
@@ -107,7 +106,7 @@ class InstagramClient:
             images = []
             video_url = None
 
-            # Extract media URLs
+            # Extract carousel or single image URLs
             carousel_media = item.get("resources") or item.get("carousel_media") or []
             if carousel_media:
                 for child in carousel_media:
